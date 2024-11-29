@@ -29,4 +29,4 @@ int main() {
     printf("Process PID = %d exiting.\n", getpid());
     return 0;
 }
-// gcc -g -o gdb_fork gdb_fork.c
+// gcc -g -o gdb_processes gdb_processes.c
