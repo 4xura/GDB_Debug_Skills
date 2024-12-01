@@ -345,7 +345,7 @@ break <address> if <condition>
 
 # GDB | Threads
 
-Code: link
+Code: [link](https://github.com/4xura/GDB_Debug_Skills/blob/main/Codes/gdb_thread.c)
 
 ## Thread | List
 
