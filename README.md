@@ -1,6 +1,6 @@
 [toc]
 
-> Update on Apr 1 2025
+> Updated on: Apr 1 2025
 
 # GDB | Init
 
@@ -910,7 +910,7 @@ Set `scheduler-locking` to `step`:
 
 ```c
 set scheduler-locking step
-set scheduler-locking si
+set scheduler-locking stepi
 ```
 
 Debug with:
@@ -1518,8 +1518,8 @@ pwndbg> i checkpoints
 * 0 Thread 0x7ffff7d8e740 (LWP 2821) (main process) at 0x55555555515f, file g_var.c, line 8
 1 process 2827 at 0x55555555513d, file g_var.c, line 7
 
-pwndbg> restart
-Requires argument (checkpoint id to restart)
+pwndbg> restart 1
+...
 ```
 
 This is powerful for **reversing**, exploit path testing, or state comparison — especially if we're dealing with nondeterministic behavior or race conditions.
@@ -1586,13 +1586,13 @@ Go to a specific instruction number in the log:
 record goto <N>
 ```
 
-Show function-level execution history:
+Show function-level execution history (required `record full`):
 
 ```sh
 record function-call-history
 ```
 
-Print disassembled instruction history:
+Print disassembled instruction history (required `record full`):
 
 ```sh
 record instruction-history
@@ -1652,7 +1652,7 @@ to **keep the terminal alive** while waiting for input/output.
 
 Example use case:
 
-![gdb_tty](README.assets/gdb_tty.jpg)
+![gdb_tty](README.assets/gdb_tty-1743585494161-1.jpg)
 
 **Using a separate TTY for GDB I/O is especially useful when debugging `qemu`-based programs**.
 
@@ -2125,7 +2125,7 @@ For example:
 contextwatch $rax+$rbx
 ```
 
-![contextwatch](README.assets/contextwatch.jpg)
+![contextwatch](README.assets/contextwatch-1743585494162-3.jpg)
 
 
 
@@ -2146,7 +2146,7 @@ p2p stack ld
 
 Looking at stack for pointer that point to libc:
 
-![p2p](README.assets/p2p.jpg)
+![p2p](README.assets/p2p-1743585494162-5.jpg)
 
 
 
@@ -2219,7 +2219,7 @@ Note: Some commands depend on glibc version (e.g., 'orange' for <= 2.23).
 
 Run `heapinfo` or `chunkinfo + <location>` for a nice looking (or check chunk integration):
 
-![heapinfo](README.assets/heapinfo.jpg)
+![heapinfo](README.assets/heapinfo-1743585494162-2.jpg)
 
 ## Pwngdb | fpchain
 
@@ -2229,7 +2229,7 @@ Run `heapinfo` or `chunkinfo + <location>` for a nice looking (or check chunk in
 
 Each of these pointers is part of a doubly-linked list (`_chain`) of active `FILE` streams.
 
-![fpchain](README.assets/fpchain.jpg)
+![fpchain](README.assets/fpchain-1743585494162-4.jpg)
 
 This direction comes from the internal glibc `FILE` structure implementation and how it builds the `_IO_list_all` linked list of active `FILE` streams.
 
@@ -2246,7 +2246,7 @@ _IO_2_1_stderr_.chain → _IO_2_1_stdout_.chain → _IO_2_1_stdin_.chain → NUL
 This order is explicitly set in `libc` code like:
 
 ```c
-cCopyEdit_IO_link_in ((struct _IO_FILE_plus *) &_IO_2_1_stderr_);
+_IO_link_in ((struct _IO_FILE_plus *) &_IO_2_1_stderr_);
 _IO_link_in ((struct _IO_FILE_plus *) &_IO_2_1_stdout_);
 _IO_link_in ((struct _IO_FILE_plus *) &_IO_2_1_stdin_);
 ```
@@ -2257,7 +2257,7 @@ So, **the last one initialized (`stdin`) ends up at the end** of the linked list
 
 Show `FILE` (`_IO_FILE`) structure conveniently, so we don't need to specify the pointer type:
 
-![fp](README.assets/fp.jpg)
+![fp](README.assets/fp-1743585494162-7.jpg)
 
 This equals to `p (struct _IO_FILE_plus*)<address>` but less colorful of course.
 
@@ -2265,7 +2265,7 @@ This equals to `p (struct _IO_FILE_plus*)<address>` but less colorful of course.
 
 Show MAGIC things in Glibc:
 
-![magic](README.assets/magic.jpg)
+![magic](README.assets/magic-1743585494162-6.jpg)
 
 
 
@@ -2330,7 +2330,7 @@ Make sure this is added **before** the `import decomp2dbg` line.
 
 Start server in IDA under `edit/plugins/Decomp2DBG`:
 
-![gdb_decomp2dbg](README.assets/gdb_decomp2dbg.jpg)
+![gdb_decomp2dbg](README.assets/gdb_decomp2dbg-1743585494162-8.jpg)
 
 IDA will output:
 
@@ -2350,7 +2350,7 @@ pwndbg> decompiler connect ida --host 192.168.xx.xx(LAN IP) --port 3662
 
 Now we can have a new Window in GDB showing the IDA decompiled code:
 
-![gdb_decomp2dbg_2](README.assets/gdb_decomp2dbg_2.jpg)
+![gdb_decomp2dbg_2](README.assets/gdb_decomp2dbg_2-1743585494162-9.jpg)
 
 
 
