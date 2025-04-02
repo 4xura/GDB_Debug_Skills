@@ -1,5 +1,7 @@
 [toc]
 
+> Update on Apr 1 2025
+
 # GDB | Init
 
 ## `.gdbinit`
@@ -631,6 +633,8 @@ ignore <breakpoint_nubmer> <count>
 
 # GDB | Watch
 
+## Basic Usage
+
 Monitor value change on variable `myVar`:
 
 ```sh
@@ -672,6 +676,58 @@ rwatch <expression>
 
 ```c
 awatch <expression>
+```
+
+## Example
+
+Code: [link](https://github.com/4xura/GDB_Debug_Skills/blob/main/Codes/gdb_watch.c)
+
+Set a **read watchpoint** to break when `global_var` is accessed:
+
+```c
+pwndbg> rwatch global_var
+Hardware read watchpoint 1: global_var
+```
+
+Set an **access watchpoint** to break when `global_var` is read or written:
+
+```c
+pwndbg> awatch global_var
+Hardware access (read/write) watchpoint 2: global_var
+```
+
+Run and inspect breakpoints:
+
+```c
+pwndbg> r
+
+pwndbg> i b
+Num     Type            Disp Enb Address            What
+1       read watchpoint keep y                      global_var
+        breakpoint already hit 1 time
+2       acc watchpoint  keep y                      global_var
+        breakpoint already hit 1 time
+```
+
+View initial value of the global variable when the first breakpoints hit:
+
+```c
+pwndbg> p global_var
+$1 = 0
+```
+
+Continue the program as breakpoints are hit, inspect the values of the global variable for example:
+
+```c
+pwndbg> i b
+Num     Type            Disp Enb Address            What
+1       read watchpoint keep y                      global_var
+        breakpoint already hit 2 times
+2       acc watchpoint  keep y                      global_var
+        breakpoint already hit 2 times
+        
+pwndbg> p global_var
+$7 = 10
 ```
 
 
