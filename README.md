@@ -2,6 +2,168 @@
 
 # GDB | Init
 
+## `.gdbinit`
+
+Personal configuration file `.gdbinit` under `~` which defines GDB behaviors:
+
+```sh
+source ~/pwn//pwndbg/gdbinit.py
+source ~/pwn/Pwngdb/pwngdb.py
+source ~/pwn/Pwngdb/angelheap/gdbinit.py
+
+# Don't skip repeat value when use telescope
+set telescope-skip-repeating-val off
+
+# Display CPU flags
+set show-flags on
+
+# Display the Link Register (LR) in AArch64
+set show-retaddr-reg on
+
+# Set backtrace lines 4
+set context-backtrace-lines 4
+
+# Don't stop when catching a SIGALARM signal, and simply prints it
+handle SIGALRM nostop print nopass
+
+# set follow-fork-mode parent
+# set detach-on-fork off
+
+# set sourcecode directory
+# directory /usr/src/glibc/glibc-2.27/malloc
+
+
+# --- Define `sbase`: PIE-aware memory view
+define sbase
+    if $argc == 1
+        telescope $rebase($arg0) 10
+    end
+
+    if $argc == 2
+        telescope $rebase($arg0) $arg1
+    end
+end
+
+document sbase
+Show memory contents at a PIE-adjusted address using telescope.
+
+Usage:
+    sbase <address>           - Show 10 entries from address + base
+    sbase <address> <count>   - Show <count> entries from address + base
+
+Note:
+    - Requires a $rebase function (e.g., via Pwngdb or manual setup).
+    - Useful for examining stack or heap in PIE binaries.
+end
+
+
+# --- Define `bbase`: PIE-aware breakpoint
+define bbase
+    b *$rebase($arg0)
+end
+
+document bbase
+Set a breakpoint at a PIE-adjusted address.
+
+Usage:
+    bbase <offset>
+
+Example:
+    bbase 0x1234   - Breaks at (base + 0x1234)
+
+Note:
+    - Requires a $rebase function to compute the correct address.
+    - Especially useful when debugging PIE binaries where fixed offsets are needed.
+end
+
+
+# --- Display memory in quadwords 
+# Usage: dq <address> [count]
+# e.g.: dq 0x601000 16
+define dq
+    if $argc == 1
+        x /8gx $arg0
+    end
+    if $argc == 2
+        x /$arg1gx $arg0
+    end
+end
+
+# --- Display memory in doublewords (32-bit)
+define dd
+    if $argc == 1
+        x /16wx $arg0
+    end
+    if $argc == 2
+        x /$arg1wx $arg0
+    end
+end
+
+# --- Display memory in words  (16-bit)
+define dw
+    if $argc == 1
+        x /32hx $arg0
+    end
+    if $argc == 2
+        x /$arg1hx $arg0
+    end
+end
+
+# --- Display memory in bytes (8-bit) 
+define db
+    if $argc == 1
+        x /64bx $arg0
+    end
+    if $argc == 2
+        x /$arg1bx $arg0
+    end
+end
+
+# --- Inject Strings & Bytes Into GDB Running Process
+define inject
+    if $argc == 0
+        printf "Usage: inject <python-bytestr>\n"
+        printf "Example: inject 'b\"ABC\\x00\\xff\"'\n"
+    else
+        set $pid = $_pid
+        shell python3 -c "import sys; sys.stdout.buffer.write($arg0)" > /proc/$pid/fd/0
+        printf "Injected bytes into /proc/%d/fd/0\n", $pid
+    end
+end
+
+document inject
+Inject arbitrary bytes into the debuggee's stdin using /proc/<pid>/fd/0.
+
+Usage:
+    inject 'b"ABC\\x00\\xff"'
+
+Note:
+    - Make sure the process is paused at a point where it is waiting for input (e.g., fgets/read).
+    - This uses python3 to write binary-safe payloads.
+
+Example:
+    (gdb) inject 'b"A"*64 + b"\\xef\\xbe\\xad\\xde"'
+end
+
+
+# --- Enable Pwngdb from https://github.com/scwuaptx/Pwngdb
+define hook-run
+python
+import angelheap
+angelheap.init_angelheap()
+end
+end
+
+set debuginfod enabled on
+
+# --- decomp2dbg from https://github.com/mahaloz/decomp2dbg
+source ~/.d2d.py
+```
+
+
+
+# GDB | Start
+
 ## Exec Template
 
 ```bash
@@ -23,6 +185,38 @@ gdb -q \
 	--args ./ld-2.35.so \
     --library-path ./libc-2.35.so.6 \
     ./pwn
+```
+
+## Other Sets
+
+Config arguments for runtime:
+
+```
+set args <args>
+```
+
+Display set arguments:
+
+```
+show args
+```
+
+Config path for binary:
+
+```
+path dir
+```
+
+Display set path:
+
+```
+show paths
+```
+
+Config environment variables:
+
+```c
+set environment <var=value>
 ```
 
 
@@ -72,6 +266,76 @@ This GDB was configured as follows:
              --with-system-readline
              --with-separate-debug-dir=/usr/lib/debug (relocatable)
              --with-system-gdbinit=/etc/gdb/gdbinit
+```
+
+## Verbose Exception
+
+```sh
+set exception-verbose on
+set exception-debugger on
+```
+
+## Ptrace Priv
+
+If we try to attach a detached child process running `gdb attach <child_pid>`, GDB probably will fail, with output:
+
+```sh
+attach: No such file or directory.
+Attaching to process 6655
+ptrace: Operation not permitted.
+```
+
+It could because the process is running as a different user. And GDB lacks sufficient privileges (e.g., requires `sudo` or `ptrace` capabilities). 
+
+On modern Linux systems, `ptrace` can be restricted by security mechanisms such as YAMA (e.g., `ptrace_scope` setting). If we check the file:
+
+```sh
+$ cat /proc/sys/kernel/yama/ptrace_scope
+1
+```
+
+A value of `1` or higher might restrict attaching to processes. We can temporarily change it to `0` for debugging:
+
+```sh
+$ sudo sysctl -w kernel.yama.ptrace_scope=0
+kernel.yama.ptrace_scope = 0
+$ cat /proc/sys/kernel/yama/ptrace_scope
+0
+```
+
+**Permanent Change**: 
+
+```sh
+echo "kernel.yama.ptrace_scope=0" | sudo tee -a /etc/sysctl.conf
+echo "kernel.yama.ptrace_scope=0" | sudo tee -a /etc/sysctl.d/99-ptrace.conf
+sudo sysctl --system
+```
+
+## Disable Skipping Stack View
+
+By default, Pwndbg skips same data in stack view for simplicity, for example:
+
+```c
+pwndbg> stack 0x20
+00:0000│ rsi rsp 0x7fffffffd670 ◂— 0x6161616161616161 ('aaaaaaaa')
+... ↓            7 skipped
+08:0040│-010     0x7fffffffd6b0 —▸ 0x4c17d0 —▸ 0x401780 ◂— endbr64 
+09:0048│-008     0x7fffffffd6b8 ◂— 0xaddb33bf2cb27700
+0a:0050│ rbp     0x7fffffffd6c0 —▸ 0x7fffffffd6d0 ◂— 1
+0b:0058│+008     0x7fffffffd6c8 —▸ 0x40186b ◂— endbr64
+```
+
+But sometimes we will need a full-scale view to debug. To stop skipping repeated values in the telescope view, use the following command:
+
+```sh
+pwndbg> set telescope-skip-repeating-val off
+Set whether to skip repeating values of the telescope command to 'off'.
+```
+
+**Make the Change Permanent**: Edit `.gdbinit` file, adding the following line:
+
+```sh
+set telescope-skip-repeating-val off
 ```
 
 
@@ -341,6 +605,114 @@ or
 break <address> if <condition>
 ```
 
+### Temp Breakpoints
+
+```c#
+tbreak <line/function>
+```
+
+### Delete & Disable
+
+```c
+delete <breakpoint_nubmer>
+disable <breakpoint_nubmer>
+enable <breakpoint_nubmer>
+```
+
+### Ignore
+
+Ignore specific breakpoint for specific times:
+
+```c
+ignore <breakpoint_nubmer> <count>
+```
+
+
+
+# GDB | Watch
+
+Monitor value change on variable `myVar`:
+
+```sh
+watch myVar
+watch (myVar > 10)
+```
+
+Monitor data inside an address:
+
+```sh
+watch *<address>
+```
+
+Monitor a pointer value:
+
+```sh
+wathc *<ptr>
+```
+
+Monitor 4 bytes of read/write:
+
+```sh
+watch *(int *)<address>
+```
+
+Monitor 8 bytes of read/write:
+
+```sh
+watch *(long long int*)<address>
+```
+
+**Read watch:**
+
+```c
+rwatch <expression>
+```
+
+**Access watch (read/write)**:
+
+```c
+awatch <expression>
+```
+
+
+
+# GDB | Catch
+
+Catch a breakpoint at specific function call:
+
+```sh
+catch <func>
+
+# example
+catch exec
+catch fork
+```
+
+Catch a syscall and set a breakpoint:
+
+```sh
+catch syscall <num|name>
+
+# example
+catch syscall read
+```
+
+Catch a signal and set a breakpoint:
+
+```sh
+catch signal <name|id>
+
+# example
+catch signal SIGTRAP
+catch signal SIGSEGV
+```
+
+Catch an assert, used to **break execution when an `assert()` fails** in the program:
+
+```sh
+cat assert
+```
+
 
 
 # GDB | Threads
@@ -472,10 +844,17 @@ Switch to the thread we want to debug:
 thread 2
 ```
 
+**Make sure only the current thread run**:
+
+```sh
+set scheduler-locking on
+```
+
 Set `scheduler-locking` to `step`:
 
 ```c
 set scheduler-locking step
+set scheduler-locking si
 ```
 
 Debug with:
@@ -486,6 +865,31 @@ s
 // Run all threads
 c
 ```
+
+## Thread | No-stop
+
+Controls whether **all threads stop** when **one thread hits a breakpoint or signal**.
+
+```sh
+set non-stop on
+set non-stop off
+```
+
+- **`on`**: Only the thread that hits the breakpoint (or signal) stops. Other threads **keep running**.
+- **`off`** (default): **All threads stop** when one hits a breakpoint.
+
+Useful for debugging **live systems** or **multi-threaded programs** where we don’t want all threads paused. Critical when debugging concurrent behaviors like race conditions or async I/O.
+
+## Thread | Async
+
+Enables **asynchronous execution** of the debugged program—i.e., GDB doesn’t block while the program is running.
+
+```sh
+set target-async on/off
+```
+
+- **`on`**: GDB lets the program run in the background, and we can continue typing commands while it's running.
+- **`off`**: GDB blocks and waits for the target to stop before returning control to us.
 
 ## Thread | Bt
 
@@ -537,6 +941,311 @@ Thread 1 (Thread 0x7ffff7d92740 (LWP 2982) "gdb_threads"):
 
 
 
+# GDB | Signal
+
+Show current signal configuration
+
+```sh
+i signal
+```
+
+Sends a signal (e.g., `SIGINT`, `SIGTERM`, etc.) to the running process. We can send numeric signals (e.g., `signal 11` for `SIGSEGV`) or symbolic ones (`signal SIGINT`):
+
+```sh
+signal <signo|name>
+```
+
+Continue execution without sending any signal. Resumes the program but **discards the current signal **(Useful if GDB stopped on a signal and we want to ignore it while continuing):
+
+```sh
+signal 0
+```
+
+Print or suppress signal output:
+
+```sh
+handle <signo> print/noprint
+```
+
+Stop or not on signal reception:
+
+```sh
+handle <signo> stop/nostop
+```
+
+Pass or block signal to the debuggee:
+
+```sh
+handle <signo> pass/nopass
+```
+
+**Usual setting**:
+
+```sh
+handle SIGALRM nostop print nopass
+```
+
+- **`nostop`**: Don't stop execution when `SIGALRM` is received.
+- **`print`**: Show it in the terminal.
+- **`nopass`**: Don't forward the signal to the target process.
+
+This is useful when debugging a program that uses `alarm()` or timers, and we don’t want those signals interfering with your session (unless we do rely on this signal to process custom execution flow).
+
+
+
+# GDB | Display
+
+Lists all currently active **display expressions**.
+
+```sh
+info display
+```
+
+Automatically prints a variable or expression on every stop.
+
+```sh
+display <FMT> <expr>
+
+# example
+display /x my_var       # hex format
+display /t flag         # binary
+display /f my_float     # float
+display /a ptr          # address
+```
+
+`{FMT}` is a format specifier (optional):
+
+- `/x` = hex
+- `/d` = decimal
+- `/u` = unsigned
+- `/t` = binary
+- `/f` = float
+- `/a` = address
+- `/c` = character
+
+Stops displaying the expression with the given number (from `info display`):
+
+```sh
+undisplay <id>
+```
+
+Example use case:
+
+```sh
+pwndbg> display $rax
+1: $rax = 93824992235849
+
+pwndbg> display /x $rax
+2: /x $rax = 0x555555555149
+
+pwndbg> n
+4           char arr1[] = "bit";         // Null-terminated string, stored as {'b', 'i', 't', '\0'}.
+1: $rax = 0
+2: /x $rax = 0x0
+
+pwndbg>
+5           char arr2[3] = "bit";        // Compiler warning: no space for the null character.
+1: $rax = 0
+2: /x $rax = 0x0
+```
+
+
+
+# GDB | Dprintf
+
+Sets a **dynamic printpoint** (a special breakpoint) that prints values **without stopping** program execution:
+
+```sh
+dprintf <location>, <format_string>, <arg1>, <arg2> ,,,
+```
+
+For example:
+
+```sh
+dprintf main, "argc = %d\n", argc
+dprintf myfunc:42, "x=%d, y=%d\n", x, y
+```
+
+Lists all breakpoints, including those created by `dprintf`:
+
+```sh
+info breakpoints
+```
+
+Example use case:
+
+```sh
+pwndbg> l
+1       #include <stdio.h>
+2
+3       int main() {
+4           char arr1[] = "bit";         // Null-terminated string, stored as {'b', 'i', 't', '\0'}.
+5           char arr2[3] = "bit";        // Compiler warning: no space for the null character.
+6           char arr3[] = {'b', 'i', 't'}; // Not null-terminated.
+7           char arr4[] = {'b', 'i', 't', '\0'}; // Explicit null character.
+8
+9           printf("%s\n", arr1); // Prints "bit".
+10          printf("%s\n", arr2); // Undefined behavior (not null-terminated).
+pwndbg>
+11          printf("%s\n", arr3); // Undefined behavior (not null-terminated).
+12          printf("%s\n", arr4); // Prints "bit".
+13
+14          return 0;
+15      }
+
+pwndbg> dprintf 9, "[!!!] Caution\n We found arr1 = %s\n", arr1
+Dprintf 1 at 0x1182: file strings_example.c, line 9.
+
+pwndbg> i b
+Num     Type           Disp Enb Address            What
+1       dprintf        keep y   0x0000000000001182 in main at strings_example.c:9
+        printf "[!!!] Caution\n We found arr1 = %s\n", arr1
+
+pwndbg> r
+Starting program: /home/Axura/pwn/test/strings_example
+Download failed: No route to host.  Continuing without separate debug info for system-supplied DSO at 0x7ffff7fc4000.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+[!!!] Caution
+We found arr1 = bit
+bit
+bitbitbit
+bitbit
+bit
+```
+
+
+
+# GDB | Disassemble
+
+Disassemble starting at `start`, for `len` bytes:
+
+```sh
+disassemble <start>,+<len>
+```
+
+Disassemble the instruction range from `start` to `end`:
+
+```sh
+disassemble <start>,<end>
+```
+
+**Example**
+
+Code: [link](https://github.com/4xura/GDB_Debug_Skills/blob/main/Codes/gdb_asm.c)
+
+**Disassemble the function:**
+
+```c
+pwndbg> disassemble add_numbers
+Dump of assembler code for function add_numbers:
+   0x0000555555555139 <+0>:       push   rbp
+   0x000055555555513a <+1>:       mov    rbp,rsp
+   0x000055555555513d <+4>:       mov    DWORD PTR [rbp-0x14],edi
+   0x0000555555555140 <+7>:       mov    DWORD PTR [rbp-0x18],esi
+   0x0000555555555143 <+10>:      mov    edx,DWORD PTR [rbp-0x14]
+   0x0000555555555146 <+13>:      mov    ecx,DWORD PTR [rbp-0x18]
+   0x0000555555555149 <+16>:      mov    eax,edx
+   0x000055555555514b <+18>:      add    eax,ecx
+   0x000055555555514d <+20>:      mov    edx,eax
+   0x000055555555514f <+22>:      mov    DWORD PTR [rbp-0x4],edx
+   0x0000555555555152 <+25>:      mov    eax,DWORD PTR [rbp-0x4]
+   0x0000555555555155 <+28>:      pop    rbp
+   0x0000555555555156 <+29>:      ret
+End of assembler dump.
+```
+
+**Switch to TUI mode for assembly view:**
+
+```sh
+layout asm
+# To exit window: ctrl+x + a
+```
+
+**Set a breakpoint** in the function and **step through the assembly**:
+
+```c
+break add_numbers
+run
+stepi   # Step one assembly instruction
+nexti   # Skip over function calls
+```
+
+**Observe register values** after each instruction:
+
+```sh
+info registers
+# or in pwndbg
+regs
+```
+
+
+
+# GDB | Frame
+
+Manipulate the **stack frame **allocated when function calls.
+
+Print the call stack (traceback), `depth` controls how deep:
+
+```sh
+backtrace <depth>
+
+# or
+bt <depth>
+```
+
+Display the current stack frame (function context):
+
+```sh
+frame
+```
+
+Move up or down in the call stack (to previous/next frame):
+
+```sh
+up
+down
+```
+
+Print local variables in the current stack frame:
+
+```sh
+info locals
+```
+
+**Example**:
+
+```sh
+pwndbg> bt
+#0  main () at pthread_attr_demo.c:35
+#1  0x00007ffff7db8488 in __libc_start_call_main (main=main@entry=0x555555555208 <main>, argc=argc@entry=1, argv=argv@entry=0x7fffffffd8e8)
+at ../sysdeps/nptl/libc_start_call_main.h:58
+#2  0x00007ffff7db854c in __libc_start_main_impl (main=0x555555555208 <main>, argc=1, argv=0x7fffffffd8e8, init=<optimized out>, fini=<optimized out>,
+rtld_fini=<optimized out>, stack_end=0x7fffffffd8d8) at ../csu/libc-start.c:360
+#3  0x0000555555555105 in _start ()
+
+pwndbg> frame
+#0  main () at pthread_attr_demo.c:35
+35          pthread_attr_destroy(&attr);
+
+pwndbg> i locals
+attr = {
+__size = '\000' <repeats 17 times>, "\020", '\000' <repeats 16 times>, " ", '\000' <repeats 20 times>,
+__align = 0
+}
+thread = 140737351571136
+err = 0
+stacksize = 2097152
+
+pwndbg> down
+► 0   0x5555555552b2 main+170
+1   0x7ffff7db8488 __libc_start_call_main+120
+2   0x7ffff7db854c __libc_start_main+140
+3   0x555555555105 _start+37
+```
+
+
+
 # GDB | Processes
 
 ## Process | Switch
@@ -568,7 +1277,7 @@ catch vfork
 
 ## Process | Detach-on-fork
 
-### On|Off
+### On | Off
 
 **`set detach-on-fork on|off`**
 
@@ -650,29 +1359,6 @@ pwndbg> info inferiors
   2    <null>                                 /home/Axura/pwn/gdb_debug_skills/gdb_processes
 ```
 
-
-
-# GDB | Watch
-
-Monitor value change on variable `myVar`:
-
-```sh
-watch myVar
-watch (myVar > 10)
-```
-
-**Read watch:**
-
-```c
-rwatch <expression>
-```
-
-**Access watch (read/write)**:
-
-```c
-awatch <expression>
-```
-
 ## Example
 
 Code: [link](https://github.com/4xura/GDB_Debug_Skills/blob/main/Codes/gdb_watch.c)
@@ -725,6 +1411,207 @@ $7 = 10
 
 
 
+# GDB | Checkpoint
+
+**GDB’s `checkpoint` feature** allows us to **save and restore the execution state** of a program mid-debugging — very useful for exploring alternate paths without restarting everything.
+
+Saves the current state of program execution (memory, registers, etc.):
+
+```
+checkpoint
+```
+
+Think of it like a **save state** in an emulator — lets us return to this point later.
+
+Lists all saved checkpoints, each with an **ID**, **location**, and **status**:
+
+```sh
+info checkpoints
+```
+
+Removes a specific checkpoint by ID to free memory or clean up:
+
+```sh
+delete checkpoint <id>
+```
+
+**Restores execution to the state** of a given checkpoint (by ID):
+
+```sh
+restart <id>
+```
+
+Typical Use Case:
+
+```sh
+pwndbg> b main
+Breakpoint 1 at 0x113d: file g_var.c, line 7.
+
+pwndbg> r
+Starting program: /home/Axura/pwn/test/g_var
+
+pwndbg> checkpoint
+checkpoint 1: fork returned pid 2827.
+
+pwndbg> n
+pwndbg> n
+pwndbg> n
+...
+
+pwndbg> i checkpoints
+* 0 Thread 0x7ffff7d8e740 (LWP 2821) (main process) at 0x55555555515f, file g_var.c, line 8
+1 process 2827 at 0x55555555513d, file g_var.c, line 7
+
+pwndbg> restart
+Requires argument (checkpoint id to restart)
+```
+
+This is powerful for **reversing**, exploit path testing, or state comparison — especially if we're dealing with nondeterministic behavior or race conditions.
+
+
+
+# GDB | Record
+
+An execution recording capabilities to help debug and analyze program state changes over time - an upgraded version of `checkpoint` command.
+
+The `record` feature is used to **trace program execution**, allowing us to inspect past instructions, function calls, and control flow.
+
+## Basic Usage
+
+```bash
+gdb ./pwn
+```
+
+Inside GDB:
+
+```
+pwndbg> start
+pwndbg> record
+```
+
+Or some other options:
+
+```bash
+record full           # Start full execution recording
+record btrace         # Start branch trace recording (less overhead)
+```
+
+We can also abbreviate:
+
+```bash
+record f              # Equivalent to record full
+record b              # Equivalent to record btrace
+```
+
+Delete the current execution log and restart recording:
+
+```sh
+record delete
+record del
+record d
+```
+
+Stop recording:
+
+```sh
+record stop
+record s
+```
+
+Save the recorded log to a file:
+
+```sh
+record save
+```
+
+Go to a specific instruction number in the log:
+
+```sh
+record goto <N>
+```
+
+Show function-level execution history:
+
+```sh
+record function-call-history
+```
+
+Print disassembled instruction history:
+
+```sh
+record instruction-history
+```
+
+## Workflow
+
+```sh
+start                        
+record full
+continue                     
+record instruction-history  # Only when record full
+reverse-stepi				# where we can step back!
+record goto 100              
+record stop    
+```
+
+
+
+# GDB | TTY
+
+Allow the **debugged program** to use a **different terminal (TTY)** for I/O, while keeping GDB interaction in our main terminal.
+
+In one terminal:
+
+```
+tty
+```
+
+Example output:
+
+```
+/dev/pts/2
+```
+
+In the **other terminal**, run GDB with the program and **attach the TTY**:
+
+```
+gdb -q --tty=/dev/pts/2 ./program
+```
+
+Then in GDB:
+
+```
+run <args...>
+```
+
+Now, the program's **input/output** will appear in `/dev/pts/2` (the first terminal), while we control GDB in the second one.
+
+It’s recommended to run this in the I/O terminal:
+
+```
+sleep infinity
+```
+
+to **keep the terminal alive** while waiting for input/output.
+
+Example use case:
+
+![gdb_tty](README.assets/gdb_tty.jpg)
+
+**Using a separate TTY for GDB I/O is especially useful when debugging `qemu`-based programs**.
+
+When we debug a **QEMU-based binary** with GDB, pressing **`Ctrl+C`** in a shared terminal:
+
+- Sends **SIGINT (0xcc)** to **both** GDB and the **QEMU process**.
+- This **kills QEMU**, potentially losing all debugging context/state.
+
+By assigning the QEMU target program its **own terminal (TTY)** for I/O:
+
+- `Ctrl+C` only interrupts **GDB**, not the QEMU process.
+- We retain control of the debugger **without crashing** the emulated system!
+
+
+
 # GDB | Docker
 
 Install `gdbserver` on the docker container, and start it where the binary is running:
@@ -739,61 +1626,6 @@ Run the `gdb` command on the local machine:
 gdb -q \
 	-ex 'target remote 127.0.0.1:port'
 	./pwn
-```
-
-
-
-# GDB | Assembly
-
-Debugging inline Assembly.
-
-## Example
-
-Code: [link](https://github.com/4xura/GDB_Debug_Skills/blob/main/Codes/gdb_asm.c)
-
-**Disassemble the function:**
-
-```c
-pwndbg> disassemble add_numbers
-Dump of assembler code for function add_numbers:
-   0x0000555555555139 <+0>:       push   rbp
-   0x000055555555513a <+1>:       mov    rbp,rsp
-   0x000055555555513d <+4>:       mov    DWORD PTR [rbp-0x14],edi
-   0x0000555555555140 <+7>:       mov    DWORD PTR [rbp-0x18],esi
-   0x0000555555555143 <+10>:      mov    edx,DWORD PTR [rbp-0x14]
-   0x0000555555555146 <+13>:      mov    ecx,DWORD PTR [rbp-0x18]
-   0x0000555555555149 <+16>:      mov    eax,edx
-   0x000055555555514b <+18>:      add    eax,ecx
-   0x000055555555514d <+20>:      mov    edx,eax
-   0x000055555555514f <+22>:      mov    DWORD PTR [rbp-0x4],edx
-   0x0000555555555152 <+25>:      mov    eax,DWORD PTR [rbp-0x4]
-   0x0000555555555155 <+28>:      pop    rbp
-   0x0000555555555156 <+29>:      ret
-End of assembler dump.
-```
-
-**Switch to TUI mode for assembly view:**
-
-```sh
-layout asm
-# To exit window: ctrl+x + a
-```
-
-**Set a breakpoint** in the function and **step through the assembly**:
-
-```c
-break add_numbers
-run
-stepi   # Step one assembly instruction
-nexti   # Skip over function calls
-```
-
-**Observe register values** after each instruction:
-
-```sh
-info registers
-# or in pwndbg
-regs
 ```
 
 
@@ -1058,7 +1890,29 @@ This confirms the crash was caused by dereferencing a null pointer.
 
 # GDB | Define
 
-Define our own commands in GDB.
+Define variables, functions, commands in GDB.
+
+## Set | Function
+
+We can use the `set` command to define a custom symbol for a function, especially **useful for a stripped binary**:
+
+```sh
+set $myfunc = (void (*)()) 0x123456
+```
+
+then we can call it:
+
+```sh
+call $myfunc()
+```
+
+## Set | Variable
+
+We can define a custom symbol for a variable at a specific memory address, especially **useful for a stripped binary**:
+
+```sh
+set $myvar = *(int *)0x123456
+```
 
 ## Define | Hook-stop
 
@@ -1071,6 +1925,292 @@ info registers
 end
 ```
 
+## Custom | `inject.gdb`
+
+Inject Strings & Bytes Into GDB Running Process. Craft the input and redirect it into the process's `stdin` via `/proc/<pid>/fd/0`.
+
+```sh
+define inject
+    if $argc == 0
+        printf "Usage: inject <python-bytestr>\n"
+        printf "Example: inject 'b\"ABC\\x00\\xff\"'\n"
+    else
+        set $pid = $_pid
+        shell python3 -c "import sys; sys.stdout.buffer.write($arg0)" > /proc/$pid/fd/0
+        printf "Injected bytes into /proc/%d/fd/0\n", $pid
+    end
+end
+
+document inject
+Inject arbitrary bytes into the debuggee's stdin using /proc/<pid>/fd/0.
+
+Usage:
+    inject 'b"ABC\\x00\\xff"'
+
+Note:
+    - Make sure the process is paused at a point where it is waiting for input (e.g., fgets/read).
+    - This uses python3 to write binary-safe payloads.
+
+Example:
+    (gdb) inject 'b"A"*64 + b"\\xef\\xbe\\xad\\xde"'
+end
+```
+
+## Custom | PIE base
+
+Show memory data and make breakpoints related to base address when PIE enabled:
+
+```sh
+# Define `sbase`: PIE-aware memory view
+define sbase
+    if $argc == 1
+        telescope $rebase($arg0) 10
+    end
+
+    if $argc == 2
+        telescope $rebase($arg0) $arg1
+    end
+end
+
+document sbase
+Show memory contents at a PIE-adjusted address using telescope.
+
+Usage:
+    sbase <address>           - Show 10 entries from address + base
+    sbase <address> <count>   - Show <count> entries from address + base
+
+Note:
+    - Requires a $rebase function (e.g., via Pwngdb or manual setup).
+    - Useful for examining stack or heap in PIE binaries.
+end
+
+
+# Define `bbase`: PIE-aware breakpoint
+define bbase
+    b *$rebase($arg0)
+end
+
+document bbase
+Set a breakpoint at a PIE-adjusted address.
+
+Usage:
+    bbase <offset>
+
+Example:
+    bbase 0x1234   - Breaks at (base + 0x1234)
+
+Note:
+    - Requires a $rebase function to compute the correct address.
+    - Especially useful when debugging PIE binaries where fixed offsets are needed.
+end
+```
+
+
+
+
+
+
+
+# GDB | Pattern
+
+Create pattern for input.
+
+## Pattern | Cyclic
+
+Create pattern:
+
+```c
+pwndbg> cyclic 64
+aaaaaaaabaaaaaaacaaaaaaadaaaaaaaeaaaaaaafaaaaaaagaaaaaaahaaaaaaa
+```
+
+Use `cyclic -l` to find the exact offset:
+
+```
+cyclic -l 0x61616164
+```
+
+This will tell us the exact offset where the buffer overflow occurred.
+
+Or search for the pattern in memory:
+
+```sh
+find $sp, $sp+200, "cyclic_pattern"
+```
+
+Or check a specific memory address:
+
+```sh
+x/s <address>
+```
+
+## Pattern | Python
+
+Create pattern:
+
+```c
+pwndbg> python print("A" * 64)
+AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+```
+
+
+
+# Pwndbg | Contextwatch
+
+Create a new window to monitor data modification:
+
+```
+contextwatch [{eval,execute}] <expression>
+```
+
+For example:
+
+```
+contextwatch $rax+$rbx
+```
+
+![contextwatch](README.assets/contextwatch.jpg)
+
+
+
+# Pwndbg | p2p
+
+Look for pointers located somewhere. Very useful when when we need to leak addresses:
+
+```sh
+p2p <mapping_names> <mapping_names> 
+```
+
+For example:L
+
+```sh
+p2p stack libc
+p2p stack ld
+```
+
+Looking at stack for pointer that point to libc:
+
+![p2p](README.assets/p2p.jpg)
+
+
+
+# Pwngdb
+
+## Overview
+
+An extension on Pwndbg. Good for heap, IO struct debugging.
+
+Install from https://github.com/scwuaptx/Pwngdb. 
+
+Edit `.gdbinit`:
+
+```sh
+source <path_to_Pwngdb>/Pwngdb/pwngdb.py
+source <path_to_Pwngdb>/angelheap/gdbinit.py
+
+define hook-run
+python
+import angelheap
+angelheap.init_angelheap()
+end
+end
+```
+
+Heap Exploitation Commands (Some are already intergrated into the modern Pwndbg):
+
+```sh
+libc             : Print the base address of libc
+ld               : Print the base address of ld
+codebase         : Print the base of code segment
+heap             : Print the base of heap
+got              : Print the Global Offset Table information
+dyn              : Print the Dynamic section information
+findcall         : Find some function call
+bcall            : Set the breakpoint at some function call
+tls              : Print the thread local storage address
+at               : Attach by process name
+findsyscall      : Find the syscall
+fmtarg           : Calculate the index of format string
+                  You need to stop on printf which has vulnerability.
+force            : Calculate the nb in the house of force
+heapinfo         : Print some information of heap
+                  Usage: heapinfo (default = current thread's arena)
+                  Shows tcache entry info if tcache is enabled
+heapinfoall      : Print some information of heap (all threads)
+arenainfo        : Print some information of all arena
+chunkinfo        : Print the information of a chunk
+                  Usage: chunkinfo <address of victim>
+chunkptr         : Print the information of a chunk from a user ptr
+                  Usage: chunkptr <address of user ptr>
+mergeinfo        : Print the information of merge
+                  Usage: mergeinfo <address of victim>
+printfastbin     : Print some information of fastbin
+tracemalloc on   : Trace malloc and free, and detect some error
+                  Run the process first, then enable tracemalloc
+                  Enable DEBUG in pwngdb.py to print all malloc/free info
+parseheap        : Parse heap layout
+magic            : Print useful variables and functions in glibc
+fp               : Show FILE structure
+                  Usage: fp <address of FILE>
+fpchain          : Show linked list of FILE
+orange           : Test house of orange condition in _IO_flush_lockp
+                  Usage: orange <address of FILE>
+
+Note: Some commands depend on glibc version (e.g., 'orange' for <= 2.23).
+```
+
+## Pwngdb | Info
+
+Run `heapinfo` or `chunkinfo + <location>` for a nice looking (or check chunk integration):
+
+![heapinfo](README.assets/heapinfo.jpg)
+
+## Pwngdb | fpchain
+
+`fpchain` command shows the internal `_IO_FILE` **linked list** of standard streams maintained by **glibc**, in this order:
+
+- `stderr` → `stdout` → `stdin`
+
+Each of these pointers is part of a doubly-linked list (`_chain`) of active `FILE` streams.
+
+![fpchain](README.assets/fpchain.jpg)
+
+This direction comes from the internal glibc `FILE` structure implementation and how it builds the `_IO_list_all` linked list of active `FILE` streams.
+
+```
+_IO_list_all → stderr → stdout → stdin → NULL
+```
+
+In glibc (e.g., `glibc/stdio-common/stdio_init.c`), the standard streams (`stdin`, `stdout`, `stderr`) are initialized during program startup, but **not in the logical order we'd expect (`stdin → stdout → stderr`)**. Instead, their order in the linked list is:
+
+```
+_IO_2_1_stderr_.chain → _IO_2_1_stdout_.chain → _IO_2_1_stdin_.chain → NULL
+```
+
+This order is explicitly set in `libc` code like:
+
+```c
+cCopyEdit_IO_link_in ((struct _IO_FILE_plus *) &_IO_2_1_stderr_);
+_IO_link_in ((struct _IO_FILE_plus *) &_IO_2_1_stdout_);
+_IO_link_in ((struct _IO_FILE_plus *) &_IO_2_1_stdin_);
+```
+
+So, **the last one initialized (`stdin`) ends up at the end** of the linked list.
+
+## Pwngdb | fp
+
+Show `FILE` (`_IO_FILE`) structure conveniently, so we don't need to specify the pointer type:
+
+![fp](README.assets/fp.jpg)
+
+This equals to `p (struct _IO_FILE_plus*)<address>` but less colorful of course.
+
+## Pwngdb| magic
+
+Show MAGIC things in Glibc:
+
+![magic](README.assets/magic.jpg)
+
 
 
 # Compile | Gcc
@@ -1080,6 +2220,89 @@ Compile C code with specific LD and LIBC:
 ```bash
 gcc -o kxheap kxheap.c -L/home/axura/pwn/kxheap/2.35 -Wl,--dynamic-linker=/home/axura/pwn/kxheap/2.35/ld-2.35.so -Wl,-rpath=/home/axura/pwn/kxheap/2.35 -lc -g
 ```
+
+
+
+# GDB x IDA
+
+## Setup
+
+Use an IDA plugin **decompdbg**, download [here](https://github.com/mahaloz/decomp2dbghttps://github.com/mahaloz/decomp2dbg), to run GDB with IDA decompiled pseudo codes (but this has some limitation when it comes to complex binaries).
+
+Pull the repo, then copy `decompilers/d2d_ida/*` under the path `IDA/plugins`.
+
+```sh
+git clone https://github.com/mahaloz/decomp2dbg.git
+
+# On Windows or where IDA installed
+cp -r ./decompilers/d2d_ida/* /path/to/ida/plugins/
+```
+
+Then, in our **Linux** machine, run:
+
+```sh
+git clone https://github.com/mahaloz/decomp2dbg.git
+cd decomp2dbg
+
+pip3 install . && \
+cp d2d.py ~/.d2d.py && echo "source ~/.d2d.py" >> ~/.gdbinit
+```
+
+Next, fix Python environment, as Pwndbg use its own Python venv. Run to check
+
+```sh
+$ python -c "import decomp2dbg; print(decomp2dbg.__file__)"
+/home/Axura/pwn/decomp2dbg/decomp2dbg/__init__.py
+```
+
+Copy the **`site-packages`** directory path:
+
+```
+/home/Axura/pwn/decomp2dbg
+```
+
+At the **very top of the copied file `.d2d.py`**, add:
+
+```
+import sys
+sys.path.append('/home/Axura/pwn/decomp2dbg')
+```
+
+Make sure this is added **before** the `import decomp2dbg` line.
+
+## Run
+
+Start server in IDA under `edit/plugins/Decomp2DBG`:
+
+![gdb_decomp2dbg](README.assets/gdb_decomp2dbg.jpg)
+
+IDA will output:
+
+```
+[+] Starting XMLRPC server: 0.0.0.0:3662
+[+] Registered decompilation server!
+```
+
+Run GDB on Linux for the same binary, and enter command:
+
+```sh
+pwndbg> start
+
+pwndbg> decompiler connect ida --host 192.168.xx.xx(LAN IP) --port 3662
+[+] Connected to decompiler!
+```
+
+Now we can have a new Window in GDB showing the IDA decompiled code:
+
+![gdb_decomp2dbg_2](README.assets/gdb_decomp2dbg_2.jpg)
+
+
+
+
+
+
+
+
 
 
 
